@@ -16,6 +16,7 @@ from translators import (LANGUAGES, ClaudeTranslator, GeminiTranslator, GoogleTr
                          translate_all)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)  # its INFO lines contain the bot token URL
 MAX_BYTES = 5 * 1024 * 1024
 ALLOWED = {".srt", ".vtt"}
 # Comma-separated Telegram user IDs; empty = anyone (anyone can spend your API credit).
@@ -104,7 +105,9 @@ async def on_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    app = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
+    app = (Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"])
+           .connect_timeout(30).read_timeout(30).write_timeout(30).pool_timeout(30)
+           .build())  # defaults (5s) are too short for a cold-started container
     app.bot_data["translator"] = make_translator()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", my_id))
