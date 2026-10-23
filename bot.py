@@ -39,7 +39,7 @@ def make_translator():
                                 os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5"))
     if choice == "gemini":
         return GeminiTranslator(os.environ["GEMINI_API_KEY"],
-                                os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+                                os.getenv("GEMINI_MODEL", "gemini-3.8-flash"))
     return GoogleTranslator(os.environ["GOOGLE_API_KEY"])
 
 
