@@ -1,0 +1,93 @@
+"""Telegram bot: send a subtitle file (.srt/.vtt), pick a language, get it back translated."""
+from __future__ import annotations
+
+import logging
+import os
+import time
+from pathlib import PurePath
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
+                          MessageHandler, filters)
+
+import subtitles
+from translators import LANGUAGES, ClaudeTranslator, GoogleTranslator, translate_all
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+MAX_BYTES = 5 * 1024 * 1024
+ALLOWED = {".srt", ".vtt"}
+
+
+def make_translator():
+    choice = os.getenv("TRANSLATOR") or ("claude" if os.getenv("ANTHROPIC_API_KEY") else "google")
+    if choice == "claude":
+        return ClaudeTranslator(os.environ["ANTHROPIC_API_KEY"],
+                                os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5"))
+    return GoogleTranslator(os.environ["GOOGLE_API_KEY"])
+
+
+async def start(update: Update, _: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "سلام! فایل زیرنویس (.srt یا .vtt) رو برام بفرست، زبان مقصد رو انتخاب کن و "
+        "ترجمه‌شده تحویل بگیر.\n\nSend me a subtitle file (.srt / .vtt) and pick a language.")
+
+
+async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    doc = update.message.document
+    if PurePath(doc.file_name or "").suffix.lower() not in ALLOWED:
+        return await update.message.reply_text("فقط فایل‌های .srt و .vtt پشتیبانی می‌شن.")
+    if doc.file_size > MAX_BYTES:
+        return await update.message.reply_text("فایل بزرگ‌تر از ۵ مگابایته.")
+    data = bytes(await (await doc.get_file()).download_as_bytearray())
+    ctx.user_data["pending"] = (doc.file_name, data)
+    langs = list(LANGUAGES.items())
+    rows = [[InlineKeyboardButton(n, callback_data=f"lang:{c}") for c, n in langs[i:i + 3]]
+            for i in range(0, len(langs), 3)]
+    await update.message.reply_text("به چه زبانی ترجمه کنم؟ / Target language?",
+                                    reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def on_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    pending = ctx.user_data.pop("pending", None)
+    if not pending:
+        return await q.edit_message_text("فایل منقضی شده، دوباره بفرست.")
+    name, data = pending
+    target = q.data.split(":", 1)[1]
+    await q.edit_message_text(f"در حال ترجمه به {LANGUAGES[target]} …")
+
+    blocks = subtitles.parse(subtitles.decode(data))
+    texts = subtitles.cue_texts(blocks)
+    last = 0.0
+
+    async def progress(done: int, total: int):
+        nonlocal last
+        if time.monotonic() - last > 3:  # stay under Telegram edit rate limits
+            last = time.monotonic()
+            await q.edit_message_text(f"در حال ترجمه به {LANGUAGES[target]} … {done}/{total}")
+
+    try:
+        translated = await translate_all(ctx.application.bot_data["translator"], texts, target,
+                                         on_progress=progress)
+    except Exception:
+        logging.exception("translation failed")
+        return await q.edit_message_text("ترجمه با خطا مواجه شد. بعداً دوباره امتحان کن.")
+
+    out = subtitles.render(blocks, translated).encode("utf-8-sig")
+    p = PurePath(name)
+    await q.message.reply_document(out, filename=f"{p.stem}.{target}{p.suffix}")
+    await q.edit_message_text("✅ آماده شد.")
+
+
+def main():
+    app = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
+    app.bot_data["translator"] = make_translator()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Document.ALL, on_file))
+    app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
