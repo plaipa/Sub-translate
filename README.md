@@ -17,3 +17,9 @@ Translators: Claude (default, best for dialogue) or Google Cloud Translation.
 
 Send `/id` to the bot to learn your Telegram ID for `ALLOWED_USERS`.
 To use Google instead: `fly secrets set TRANSLATOR=google GOOGLE_API_KEY=...`.
+
+## Free hosting on Render (webhook)
+Create a *Web Service* from this repo (Docker), free instance, and set env vars
+`TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`, `ALLOWED_USERS`. Render sets `RENDER_EXTERNAL_URL`
+and `PORT`, so the bot switches to webhook mode by itself. The free instance sleeps when
+idle; the first message after a sleep is answered after a cold start.

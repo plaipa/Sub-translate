@@ -26,12 +26,12 @@ class Translator(Protocol):
 
 
 async def translate_all(tr: Translator, texts: list[str], target: str,
-                        batch_size: int = 40, concurrency: int = 4, on_progress=None) -> list[str]:
+                        batch_size: int = 40, on_progress=None) -> list[str]:
     """Translate cue texts, preserving leading {\\an8}-style tags and empty cues."""
     split = [split_leading_tags(t) for t in texts]
     todo = [i for i, (_, body) in enumerate(split) if body.strip()]
     result = [body for _, body in split]
-    sem, done = asyncio.Semaphore(concurrency), 0
+    sem, done = asyncio.Semaphore(getattr(tr, "concurrency", 4)), 0
 
     async def run(chunk: list[int]):
         nonlocal done
@@ -64,7 +64,9 @@ class GoogleTranslator:
         return out
 
 
-class ClaudeTranslator:
+class LLMTranslator:
+    """Shared prompt + retry/split logic for chat models; subclasses implement `_complete`."""
+    concurrency = 4
     SYSTEM = (
         "You are a professional subtitle translator. Translate each numbered subtitle line into "
         "{lang}. The lines are consecutive dialogue from one film/show, so use surrounding lines "
@@ -74,19 +76,15 @@ class ClaudeTranslator:
         "length and order as the input."
     )
 
-    def __init__(self, api_key: str, model: str):
-        from anthropic import AsyncAnthropic
-        self.client = AsyncAnthropic(api_key=api_key)
-        self.model = model
+    async def _complete(self, system: str, user: str) -> str:
+        raise NotImplementedError
 
     async def translate_batch(self, texts: list[str], target: str) -> list[str]:
-        lang = LANGUAGES.get(target, target)
+        system = self.SYSTEM.format(lang=LANGUAGES.get(target, target))
         for attempt in range(2):
-            msg = await self.client.messages.create(
-                model=self.model, max_tokens=8192, system=self.SYSTEM.format(lang=lang),
-                messages=[{"role": "user", "content": json.dumps(texts, ensure_ascii=False)}])
+            raw = await self._complete(system, json.dumps(texts, ensure_ascii=False))
             try:
-                out = _parse_array(msg.content[0].text)
+                out = _parse_array(raw)
                 if len(out) == len(texts):
                     return out
             except ValueError:
@@ -97,6 +95,42 @@ class ClaudeTranslator:
         mid = len(texts) // 2  # misaligned output: retry on smaller halves
         return (await self.translate_batch(texts[:mid], target)
                 + await self.translate_batch(texts[mid:], target))
+
+
+class ClaudeTranslator(LLMTranslator):
+    def __init__(self, api_key: str, model: str):
+        from anthropic import AsyncAnthropic
+        self.client = AsyncAnthropic(api_key=api_key)
+        self.model = model
+
+    async def _complete(self, system: str, user: str) -> str:
+        msg = await self.client.messages.create(
+            model=self.model, max_tokens=8192, system=system,
+            messages=[{"role": "user", "content": user}])
+        return msg.content[0].text
+
+
+class GeminiTranslator(LLMTranslator):
+    concurrency = 2  # stay under free-tier rate limits
+    URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+    def __init__(self, api_key: str, model: str):
+        self.key, self.model = api_key, model
+        self.http = httpx.AsyncClient(timeout=120)
+
+    async def _complete(self, system: str, user: str) -> str:
+        body = {"systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": [{"text": user}]}],
+                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3}}
+        for attempt in range(4):
+            r = await self.http.post(self.URL.format(model=self.model), json=body,
+                                     headers={"x-goog-api-key": self.key})
+            if r.status_code in (429, 500, 503) and attempt < 3:
+                await asyncio.sleep(2 ** (attempt + 1))  # rate limited / overloaded
+                continue
+            r.raise_for_status()
+            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        raise RuntimeError("unreachable")
 
 
 def _parse_array(raw: str) -> list[str]:

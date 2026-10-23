@@ -1,6 +1,7 @@
 """Telegram bot: send a subtitle file (.srt/.vtt), pick a language, get it back translated."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -11,7 +12,8 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, Con
                           MessageHandler, filters)
 
 import subtitles
-from translators import LANGUAGES, ClaudeTranslator, GoogleTranslator, translate_all
+from translators import (LANGUAGES, ClaudeTranslator, GeminiTranslator, GoogleTranslator,
+                         translate_all)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 MAX_BYTES = 5 * 1024 * 1024
@@ -29,10 +31,15 @@ async def my_id(update: Update, _: ContextTypes.DEFAULT_TYPE):
 
 
 def make_translator():
-    choice = os.getenv("TRANSLATOR") or ("claude" if os.getenv("ANTHROPIC_API_KEY") else "google")
+    choice = os.getenv("TRANSLATOR") or next(
+        (n for n, var in (("claude", "ANTHROPIC_API_KEY"), ("gemini", "GEMINI_API_KEY")) if os.getenv(var)),
+        "google")
     if choice == "claude":
         return ClaudeTranslator(os.environ["ANTHROPIC_API_KEY"],
                                 os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5"))
+    if choice == "gemini":
+        return GeminiTranslator(os.environ["GEMINI_API_KEY"],
+                                os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
     return GoogleTranslator(os.environ["GOOGLE_API_KEY"])
 
 
@@ -103,7 +110,17 @@ def main():
     app.add_handler(CommandHandler("id", my_id))
     app.add_handler(MessageHandler(filters.Document.ALL, on_file))
     app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
-    app.run_polling()
+    # Webhook mode (e.g. Render free web service: Telegram wakes the sleeping service);
+    # otherwise long polling.
+    base = os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    if base:
+        token = os.environ["TELEGRAM_BOT_TOKEN"]
+        path = hashlib.sha256(token.encode()).hexdigest()[:32]  # keeps the token out of the URL
+        app.run_webhook(listen="0.0.0.0", port=int(os.getenv("PORT", "8080")), url_path=path,
+                        webhook_url=f"{base.rstrip('/')}/{path}", secret_token=path[::-1],
+                        drop_pending_updates=True)
+    else:
+        app.run_polling()
 
 
 if __name__ == "__main__":

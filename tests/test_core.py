@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import subtitles
-from translators import _parse_array, translate_all
+from translators import LLMTranslator, _parse_array, translate_all
 
 SRT = "1\n00:00:01,000 --> 00:00:02,000\nHello\nworld\n\n2\n00:00:03,000 --> 00:00:04,000\n{\\an8}<i>Bye</i>\n"
 VTT = "WEBVTT\n\nNOTE hi\n\n00:01.000 --> 00:02.000\nHello\n"
@@ -39,3 +39,16 @@ def test_decode_cp1256():
 
 def test_parse_array_tolerates_wrapping():
     assert _parse_array('Here:\n```json\n["a","b"]\n```') == ["a", "b"]
+
+
+class Bad(LLMTranslator):
+    """Misaligned output for batches > 1 forces the split-and-retry path."""
+    async def _complete(self, system, user):
+        import json
+        items = json.loads(user)
+        return json.dumps(items if len(items) == 1 else items[:-1])
+
+
+def test_llm_split_fallback_keeps_alignment():
+    out = asyncio.run(Bad().translate_batch(["a", "b", "c"], "fa"))
+    assert out == ["a", "b", "c"]
