@@ -1,0 +1,11 @@
+app = "sub-translate-bot"   # change to a unique name
+primary_region = "fra"      # Frankfurt
+
+# Long-polling worker: no ports, no http_service, so Fly never auto-stops it.
+[processes]
+  app = "python bot.py"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  processes = ["app"]

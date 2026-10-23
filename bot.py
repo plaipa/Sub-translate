@@ -16,6 +16,16 @@ from translators import LANGUAGES, ClaudeTranslator, GoogleTranslator, translate
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 MAX_BYTES = 5 * 1024 * 1024
 ALLOWED = {".srt", ".vtt"}
+# Comma-separated Telegram user IDs; empty = anyone (anyone can spend your API credit).
+ALLOWED_USERS = {int(x) for x in os.getenv("ALLOWED_USERS", "").split(",") if x.strip()}
+
+
+def permitted(update: Update) -> bool:
+    return not ALLOWED_USERS or update.effective_user.id in ALLOWED_USERS
+
+
+async def my_id(update: Update, _: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"Your Telegram ID: {update.effective_user.id}")
 
 
 def make_translator():
@@ -27,12 +37,16 @@ def make_translator():
 
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE):
+    if not permitted(update):
+        return await update.message.reply_text("این بات خصوصیه. / This bot is private.")
     await update.message.reply_text(
         "سلام! فایل زیرنویس (.srt یا .vtt) رو برام بفرست، زبان مقصد رو انتخاب کن و "
         "ترجمه‌شده تحویل بگیر.\n\nSend me a subtitle file (.srt / .vtt) and pick a language.")
 
 
 async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not permitted(update):
+        return await update.message.reply_text("این بات خصوصیه. / This bot is private.")
     doc = update.message.document
     if PurePath(doc.file_name or "").suffix.lower() not in ALLOWED:
         return await update.message.reply_text("فقط فایل‌های .srt و .vtt پشتیبانی می‌شن.")
@@ -50,6 +64,8 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def on_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    if not permitted(update):
+        return
     pending = ctx.user_data.pop("pending", None)
     if not pending:
         return await q.edit_message_text("فایل منقضی شده، دوباره بفرست.")
@@ -84,6 +100,7 @@ def main():
     app = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
     app.bot_data["translator"] = make_translator()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("id", my_id))
     app.add_handler(MessageHandler(filters.Document.ALL, on_file))
     app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
     app.run_polling()
