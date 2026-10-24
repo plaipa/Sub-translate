@@ -120,3 +120,37 @@ def test_gemini_falls_back_to_next_model_on_overload():
         assert "bad-model" in tr._cool  # overloaded model is skipped for a while
         return out
     assert asyncio.run(go()) == ["ok"]
+
+
+def _credit(content, text="Translated by @bot"):
+    blocks = subtitles.parse(content)
+    tr = subtitles.cue_texts(blocks)
+    b, t = subtitles.add_credit(blocks, tr, text)
+    return subtitles.render(b, t)
+
+
+def test_credit_goes_after_last_line_and_srt_stays_numbered():
+    out = _credit(SRT)  # first line starts at 1s: no room for a credit at the start
+    assert out.startswith("1\n00:00:01,000")
+    assert out.rstrip().endswith("3\n00:00:04,500 --> 00:00:08,500\nTranslated by @bot")
+
+
+def test_credit_also_at_start_when_there_is_room_and_numbers_are_rewritten():
+    srt = "1\n00:00:10,000 --> 00:00:12,000\nHi\n\n2\n00:00:13,000 --> 00:00:14,000\nBye\n"
+    out = _credit(srt)
+    assert out.startswith("1\n00:00:00,500 --> 00:00:02,800\nTranslated by @bot\n\n2\n00:00:10,000")
+    assert "\n\n3\n00:00:13,000" in out and "\n\n4\n00:00:14,500 --> 00:00:18,500\nTranslated" in out
+
+
+def test_credit_vtt_keeps_header_and_time_style():
+    vtt = "WEBVTT\n\n00:05.000 --> 00:06.000\nHello\n"
+    out = _credit(vtt)
+    assert out.startswith("WEBVTT\n\n00:00.500 --> 00:02.800\nTranslated by @bot")
+    assert out.rstrip().endswith("00:06.500 --> 00:10.500\nTranslated by @bot")
+
+
+def test_translated_filename():
+    f = subtitles.translated_filename
+    assert f("Movie.2020.1080p.srt", "fa", "my_bot") == "Movie.2020.1080p.fa.@my_bot.srt"
+    assert f("Movie.2020.en.srt", "fa", "my_bot") == "Movie.2020.fa.@my_bot.srt"  # old tag dropped
+    assert f("Inception.vtt", "zh-CN", "my_bot") == "Inception.zh-CN.@my_bot.vtt"

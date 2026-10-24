@@ -162,9 +162,11 @@ async def on_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         quota(ctx.user_data)["used"] -= 1  # a failed translation doesn't count
         return await q.edit_message_text(t(ctx, "failed"))
 
+    blocks, translated = subtitles.add_credit(blocks, translated,
+                                              f"Translated by @{ctx.bot.username}")
     out = subtitles.render(blocks, translated).encode("utf-8-sig")
-    p = PurePath(name)
-    await q.message.reply_document(out, filename=f"{p.stem}.{target}{p.suffix}")
+    await q.message.reply_document(
+        out, filename=subtitles.translated_filename(name, target, ctx.bot.username))
     await q.edit_message_text(t(ctx, "done"))
 
 
