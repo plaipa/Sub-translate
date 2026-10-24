@@ -69,3 +69,17 @@ def test_profile_texts_fit_telegram_limits_and_mention_support():
     from i18n import DESCRIPTION, SHORT_DESCRIPTION, SUPPORT
     assert len(DESCRIPTION) <= 512 and len(SHORT_DESCRIPTION) <= 120
     assert SUPPORT in DESCRIPTION and SUPPORT in SHORT_DESCRIPTION
+
+
+def test_daily_limit_resets_each_day(monkeypatch):
+    import bot
+    monkeypatch.setattr(bot, "DAILY_LIMIT", 2)
+    ud = {}
+    assert not bot.over_limit(ud)
+    bot.quota(ud)["used"] = 2
+    assert bot.over_limit(ud)
+    ud["quota"]["day"] = "2000-01-01"  # yesterday's usage must not carry over
+    assert not bot.over_limit(ud) and ud["quota"]["used"] == 0
+    monkeypatch.setattr(bot, "DAILY_LIMIT", 0)  # 0 = unlimited
+    ud["quota"]["used"] = 999
+    assert not bot.over_limit(ud)

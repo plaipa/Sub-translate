@@ -38,6 +38,7 @@ S = {
     failed="Translation failed. Please try again later.", done="✅ Done.",
     expired="That file has expired, please send it again.", private="This bot is private.",
     your_id="Your Telegram ID: {id}",
+    limit_reached="Daily limit reached: {limit} files per day. Please try again tomorrow (the limit resets at 00:00 UTC).",
     cmd_start="Start", cmd_language="Change bot language", cmd_help="How it works", cmd_id="Show my Telegram ID"),
 "fa": dict(
     welcome="سلام! یه فایل زیرنویس (.srt یا .vtt) برام بفرست، زبان مقصد رو انتخاب کن و ترجمه‌شده تحویل بگیر.\n\nمنو: /language – تغییر زبان بات · /help – راهنما",
@@ -48,6 +49,7 @@ S = {
     failed="ترجمه با خطا مواجه شد. بعداً دوباره امتحان کن.", done="✅ آماده شد.",
     expired="فایل منقضی شده، دوباره بفرست.", private="این بات خصوصیه.",
     your_id="آیدی تلگرام شما: {id}",
+    limit_reached="به سقف روزانه رسیدی: {limit} فایل در روز. فردا دوباره امتحان کن (سقف ساعت ۰۰:۰۰ UTC ریست میشه).",
     cmd_start="شروع", cmd_language="تغییر زبان بات", cmd_help="راهنما", cmd_id="نمایش آیدی تلگرام من"),
 "zh": dict(
     welcome="你好！发送字幕文件（.srt 或 .vtt），选择目标语言，我会把翻译后的文件发回给你。\n\n菜单：/language – 更改机器人语言 · /help – 使用说明",
@@ -58,6 +60,7 @@ S = {
     failed="翻译失败，请稍后再试。", done="✅ 完成。",
     expired="文件已过期，请重新发送。", private="这是私人机器人。",
     your_id="你的 Telegram ID：{id}",
+    limit_reached="已达到每日上限：每天 {limit} 个文件。请明天再试（每天 00:00 UTC 重置）。",
     cmd_start="开始", cmd_language="更改机器人语言", cmd_help="使用说明", cmd_id="显示我的 Telegram ID"),
 "ru": dict(
     welcome="Привет! Отправьте файл субтитров (.srt или .vtt), выберите язык перевода, и я верну переведённый файл.\n\nМеню: /language – сменить язык бота · /help – как это работает",
@@ -68,6 +71,7 @@ S = {
     failed="Не удалось выполнить перевод. Попробуйте позже.", done="✅ Готово.",
     expired="Файл устарел, отправьте его снова.", private="Этот бот частный.",
     your_id="Ваш Telegram ID: {id}",
+    limit_reached="Дневной лимит исчерпан: {limit} файлов в день. Попробуйте завтра (лимит сбрасывается в 00:00 UTC).",
     cmd_start="Начать", cmd_language="Сменить язык бота", cmd_help="Как это работает", cmd_id="Показать мой Telegram ID"),
 "hi": dict(
     welcome="नमस्ते! मुझे सबटाइटल फ़ाइल (.srt या .vtt) भेजें, लक्ष्य भाषा चुनें, और मैं अनुवाद करके वापस भेज दूँगा।\n\nमेनू: /language – बॉट की भाषा बदलें · /help – उपयोग कैसे करें",
@@ -78,6 +82,7 @@ S = {
     failed="अनुवाद विफल रहा। कृपया बाद में पुनः प्रयास करें।", done="✅ हो गया।",
     expired="फ़ाइल की अवधि समाप्त हो गई, कृपया दोबारा भेजें।", private="यह बॉट निजी है।",
     your_id="आपका Telegram ID: {id}",
+    limit_reached="दैनिक सीमा पूरी हो गई: प्रतिदिन {limit} फ़ाइलें। कृपया कल पुनः प्रयास करें (सीमा 00:00 UTC पर रीसेट होती है)।",
     cmd_start="शुरू करें", cmd_language="बॉट की भाषा बदलें", cmd_help="उपयोग कैसे करें", cmd_id="मेरा Telegram ID दिखाएँ"),
 "es": dict(
     welcome="¡Hola! Envíame un archivo de subtítulos (.srt o .vtt), elige el idioma de destino y te lo devolveré traducido.\n\nMenú: /language – cambiar el idioma del bot · /help – cómo funciona",
@@ -88,6 +93,7 @@ S = {
     failed="La traducción falló. Inténtalo de nuevo más tarde.", done="✅ Listo.",
     expired="El archivo ha caducado, envíalo de nuevo.", private="Este bot es privado.",
     your_id="Tu ID de Telegram: {id}",
+    limit_reached="Has alcanzado el límite diario: {limit} archivos por día. Inténtalo mañana (el límite se restablece a las 00:00 UTC).",
     cmd_start="Iniciar", cmd_language="Cambiar idioma del bot", cmd_help="Cómo funciona", cmd_id="Mostrar mi ID de Telegram"),
 "tr": dict(
     welcome="Merhaba! Bana bir altyazı dosyası (.srt veya .vtt) gönder, hedef dili seç; çevrilmiş halini geri göndereyim.\n\nMenü: /language – bot dilini değiştir · /help – nasıl çalışır",
@@ -98,6 +104,7 @@ S = {
     failed="Çeviri başarısız oldu. Lütfen daha sonra tekrar dene.", done="✅ Tamam.",
     expired="Dosyanın süresi doldu, lütfen tekrar gönder.", private="Bu bot özeldir.",
     your_id="Telegram kimliğin: {id}",
+    limit_reached="Günlük sınıra ulaşıldı: günde {limit} dosya. Lütfen yarın tekrar dene (sınır 00:00 UTC'de sıfırlanır).",
     cmd_start="Başlat", cmd_language="Bot dilini değiştir", cmd_help="Nasıl çalışır", cmd_id="Telegram kimliğimi göster"),
 "ar": dict(
     welcome="مرحباً! أرسل لي ملف ترجمة (.srt أو .vtt)، واختر اللغة المطلوبة، وسأعيده إليك مترجماً.\n\nالقائمة: /language – تغيير لغة البوت · /help – طريقة الاستخدام",
@@ -108,6 +115,7 @@ S = {
     failed="فشلت الترجمة. حاول مرة أخرى لاحقاً.", done="✅ تم.",
     expired="انتهت صلاحية الملف، أرسله مرة أخرى.", private="هذا البوت خاص.",
     your_id="معرّف تيليجرام الخاص بك: {id}",
+    limit_reached="تم بلوغ الحد اليومي: {limit} ملفات في اليوم. حاول مرة أخرى غداً (يُعاد ضبط الحد عند 00:00 UTC).",
     cmd_start="ابدأ", cmd_language="تغيير لغة البوت", cmd_help="طريقة الاستخدام", cmd_id="عرض معرّفي"),
 }
 

@@ -5,6 +5,7 @@ import hashlib
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import PurePath
 
 from telegram import (BotCommand, BotCommandScopeChat, InlineKeyboardButton,
@@ -23,11 +24,25 @@ logging.getLogger("httpx").setLevel(logging.WARNING)  # its INFO lines contain t
 MAX_BYTES = 5 * 1024 * 1024
 ALLOWED = {".srt", ".vtt"}
 # Comma-separated Telegram user IDs; empty = anyone (anyone can spend your API credit).
+# Max files a user may translate per UTC day (0 = unlimited).
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "5"))
 ALLOWED_USERS = {int(x) for x in os.getenv("ALLOWED_USERS", "").split(",") if x.strip()}
 
 
 def permitted(update: Update) -> bool:
     return not ALLOWED_USERS or update.effective_user.id in ALLOWED_USERS
+
+
+def quota(user_data: dict) -> dict:
+    today = datetime.now(timezone.utc).date().isoformat()
+    q = user_data.get("quota")
+    if not q or q["day"] != today:
+        q = user_data["quota"] = {"day": today, "used": 0}
+    return q
+
+
+def over_limit(user_data: dict) -> bool:
+    return DAILY_LIMIT > 0 and quota(user_data)["used"] >= DAILY_LIMIT
 
 
 def t(ctx: ContextTypes.DEFAULT_TYPE, key: str, **kw) -> str:
@@ -103,6 +118,8 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text(t(ctx, "bad_type"))
     if doc.file_size > MAX_BYTES:
         return await update.message.reply_text(t(ctx, "too_big"))
+    if over_limit(ctx.user_data):
+        return await update.message.reply_text(t(ctx, "limit_reached", limit=DAILY_LIMIT))
     data = bytes(await (await doc.get_file()).download_as_bytearray())
     # Kept in bot_data (not persisted) so uploaded files never end up in the pickle file.
     ctx.application.bot_data.setdefault("pending", {})[update.effective_user.id] = (doc.file_name, data)
@@ -118,6 +135,9 @@ async def on_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pending = ctx.application.bot_data.get("pending", {}).pop(update.effective_user.id, None)
     if not pending:
         return await q.edit_message_text(t(ctx, "expired"))
+    if over_limit(ctx.user_data):
+        return await q.edit_message_text(t(ctx, "limit_reached", limit=DAILY_LIMIT))
+    quota(ctx.user_data)["used"] += 1  # reserve before translating so parallel uploads can't dodge the limit
     name, data = pending
     target = q.data.split(":", 1)[1]
     lang = NATIVE[target]
@@ -138,6 +158,7 @@ async def on_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                          on_progress=progress)
     except Exception:
         logging.exception("translation failed")
+        quota(ctx.user_data)["used"] -= 1  # a failed translation doesn't count
         return await q.edit_message_text(t(ctx, "failed"))
 
     out = subtitles.render(blocks, translated).encode("utf-8-sig")
