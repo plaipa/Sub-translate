@@ -182,6 +182,7 @@ def main():
                                                     callback_data=False))
     app = (Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"])
            .persistence(persistence).post_init(post_init)
+           .concurrent_updates(True)  # a long translation must not block other users
            .connect_timeout(30).read_timeout(30).write_timeout(30).pool_timeout(30)
            .build())  # defaults (5s) are too short for a cold-started container
     app.bot_data["translator"] = make_translator()

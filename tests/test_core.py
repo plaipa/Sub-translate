@@ -102,24 +102,68 @@ def test_daily_limit_resets_each_day(monkeypatch):
     assert not bot.over_limit(ud)
 
 
-def test_gemini_falls_back_to_next_model_on_overload():
+def _gemini(handler, models, monkeypatch):
     import httpx
     from translators import GeminiTranslator
+    slept = []
+
+    async def fake_sleep(s):
+        slept.append(s)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(GeminiTranslator, "MIN_INTERVAL", 0)
+    tr = GeminiTranslator("k", models)
+    tr.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return tr, slept
+
+
+def _ok(text):
+    import httpx
+    return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": text}]}}]})
+
+
+def test_gemini_falls_back_to_next_model_on_overload(monkeypatch):
+    import httpx
 
     def handler(request):
         if "bad-model" in str(request.url):
             return httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}})
-        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": '{"0": "ok"}'}]}}]})
+        return _ok('{"0": "ok"}')
 
-    async def go():
-        tr = GeminiTranslator("k", ["bad-model", "good-model"])
-        tr.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        async def no_sleep(_): pass
-        import translators; translators.asyncio.sleep = no_sleep
-        out = await tr.translate_batch(["x"], "fa")
-        assert "bad-model" in tr._cool  # overloaded model is skipped for a while
-        return out
-    assert asyncio.run(go()) == ["ok"]
+    tr, _ = _gemini(handler, ["bad-model", "good-model"], monkeypatch)
+    assert asyncio.run(tr.translate_batch(["x"], "fa")) == ["ok"]
+    assert "bad-model" in tr._cool  # overloaded model is skipped for a while
+
+
+def test_gemini_waits_for_the_retry_delay_on_429_then_succeeds(monkeypatch):
+    import httpx
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) < 3:
+            return httpx.Response(429, json={"error": {"status": "RESOURCE_EXHAUSTED", "details": [
+                {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "12s"}]}})
+        return _ok('{"0": "ok"}')
+
+    tr, slept = _gemini(handler, ["only-model"], monkeypatch)
+    assert asyncio.run(tr.translate_batch(["x"], "fa")) == ["ok"]
+    assert len(calls) == 3 and slept == [12.0, 12.0]  # stayed on the same model and waited as asked
+
+
+def test_gemini_caps_the_wait(monkeypatch):
+    import httpx
+
+    def handler(request):
+        if len(handler.n) < 1:
+            handler.n.append(1)
+            return httpx.Response(429, json={"error": {"details": [
+                {"@type": "x.RetryInfo", "retryDelay": "600s"}]}})
+        return _ok('{"0": "ok"}')
+    handler.n = []
+
+    tr, slept = _gemini(handler, ["m"], monkeypatch)
+    asyncio.run(tr.translate_batch(["x"], "fa"))
+    assert slept == [45]
 
 
 def _credit(content, text="Translated by @bot"):

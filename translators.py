@@ -27,8 +27,9 @@ class Translator(Protocol):
 
 
 async def translate_all(tr: Translator, texts: list[str], target: str,
-                        batch_size: int = 40, on_progress=None) -> list[str]:
+                        batch_size: int | None = None, on_progress=None) -> list[str]:
     """Translate cue texts, preserving leading {\\an8}-style tags and empty cues."""
+    batch_size = batch_size or getattr(tr, "batch_size", 40)
     split = [split_leading_tags(t) for t in texts]
     todo = [i for i, (_, body) in enumerate(split) if body.strip()]
     result = [body for _, body in split]
@@ -118,17 +119,44 @@ class ClaudeTranslator(LLMTranslator):
 
 
 class GeminiTranslator(LLMTranslator):
-    """Tries each model in order; falls through on quota / overload / timeout errors."""
-    concurrency = 2  # stay under free-tier rate limits
+    """Free-tier friendly: requests are spaced out, a 429 waits for the delay Google asks for,
+    and a model that keeps failing is skipped for a while in favour of the next one."""
+    concurrency = 2  # overlaps request latency; MIN_INTERVAL still caps the request rate
+    batch_size = 60  # fewer, bigger requests: the free tier limits requests per minute
+    MIN_INTERVAL = 4.0  # seconds between request starts (~15 per minute)
     URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     RETRY_STATUS = (429, 500, 503)
-
+    ATTEMPTS = 3
+    MAX_WAIT = 45  # never sleep longer than this for one retry
     COOLDOWN = 60  # seconds to skip a model after it failed with an overload / quota error
 
     def __init__(self, api_key: str, models: list[str]):
         self.key, self.models = api_key, models
         self.http = httpx.AsyncClient(timeout=60)
         self._cool: dict[str, float] = {}
+        self._gate = asyncio.Lock()
+        self._next_slot = 0.0
+
+    async def _throttle(self):
+        async with self._gate:
+            wait = self._next_slot - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._next_slot = time.monotonic() + self.MIN_INTERVAL
+
+    @staticmethod
+    def _retry_delay(r: httpx.Response) -> float | None:
+        """Seconds Google asks us to wait (RetryInfo in the error body, or Retry-After)."""
+        try:
+            for d in r.json()["error"].get("details", []):
+                if d.get("@type", "").endswith("RetryInfo"):
+                    return float(str(d["retryDelay"]).rstrip("s"))
+        except (ValueError, KeyError, TypeError):
+            pass
+        try:
+            return float(r.headers["retry-after"])
+        except (KeyError, ValueError):
+            return None
 
     async def _complete(self, system: str, user: str) -> str:
         body = {"systemInstruction": {"parts": [{"text": system}]},
@@ -138,7 +166,9 @@ class GeminiTranslator(LLMTranslator):
         now = time.monotonic()
         usable = [m for m in self.models if self._cool.get(m, 0) <= now]
         for model in usable or self.models:  # everything cooling down: just try them all again
-            for attempt in range(2):
+            for attempt in range(self.ATTEMPTS):
+                delay = 2.0
+                await self._throttle()
                 try:
                     r = await self.http.post(self.URL.format(model=model), json=body,
                                              headers={"x-goog-api-key": self.key})
@@ -146,11 +176,13 @@ class GeminiTranslator(LLMTranslator):
                         r.raise_for_status()
                         return r.json()["candidates"][0]["content"]["parts"][0]["text"]
                     last = httpx.HTTPStatusError(f"{model}: HTTP {r.status_code}", request=r.request, response=r)
+                    if r.status_code == 429:
+                        delay = self._retry_delay(r) or 5.0 * (attempt + 1)
                 except httpx.TimeoutException as e:
                     last = e
                 log.warning("gemini %s failed (attempt %d): %r", model, attempt + 1, last)
-                if attempt == 0:
-                    await asyncio.sleep(2)
+                if attempt < self.ATTEMPTS - 1:
+                    await asyncio.sleep(min(delay, self.MAX_WAIT))
             self._cool[model] = time.monotonic() + self.COOLDOWN
         raise last or RuntimeError("no Gemini model configured")
 
