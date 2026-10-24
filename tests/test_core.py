@@ -83,3 +83,21 @@ def test_daily_limit_resets_each_day(monkeypatch):
     monkeypatch.setattr(bot, "DAILY_LIMIT", 0)  # 0 = unlimited
     ud["quota"]["used"] = 999
     assert not bot.over_limit(ud)
+
+
+def test_gemini_falls_back_to_next_model_on_overload():
+    import httpx
+    from translators import GeminiTranslator
+
+    def handler(request):
+        if "bad-model" in str(request.url):
+            return httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}})
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": '["ok"]'}]}}]})
+
+    async def go():
+        tr = GeminiTranslator("k", ["bad-model", "good-model"])
+        tr.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        async def no_sleep(_): pass
+        import translators; translators.asyncio.sleep = no_sleep
+        return await tr.translate_batch(["x"], "fa")
+    assert asyncio.run(go()) == ["ok"]

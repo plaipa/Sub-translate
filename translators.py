@@ -111,26 +111,35 @@ class ClaudeTranslator(LLMTranslator):
 
 
 class GeminiTranslator(LLMTranslator):
+    """Tries each model in order; falls through on quota / overload / timeout errors."""
     concurrency = 2  # stay under free-tier rate limits
     URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    RETRY_STATUS = (429, 500, 503)
 
-    def __init__(self, api_key: str, model: str):
-        self.key, self.model = api_key, model
-        self.http = httpx.AsyncClient(timeout=120)
+    def __init__(self, api_key: str, models: list[str]):
+        self.key, self.models = api_key, models
+        self.http = httpx.AsyncClient(timeout=60)
 
     async def _complete(self, system: str, user: str) -> str:
         body = {"systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": user}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3}}
-        for attempt in range(4):
-            r = await self.http.post(self.URL.format(model=self.model), json=body,
-                                     headers={"x-goog-api-key": self.key})
-            if r.status_code in (429, 500, 503) and attempt < 3:
-                await asyncio.sleep(2 ** (attempt + 1))  # rate limited / overloaded
-                continue
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-        raise RuntimeError("unreachable")
+        last: Exception | None = None
+        for model in self.models:
+            for attempt in range(2):
+                try:
+                    r = await self.http.post(self.URL.format(model=model), json=body,
+                                             headers={"x-goog-api-key": self.key})
+                    if r.status_code not in self.RETRY_STATUS:
+                        r.raise_for_status()
+                        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    last = httpx.HTTPStatusError(f"{model}: HTTP {r.status_code}", request=r.request, response=r)
+                except httpx.TimeoutException as e:
+                    last = e
+                log.warning("gemini %s failed (attempt %d): %r", model, attempt + 1, last)
+                if attempt == 0:
+                    await asyncio.sleep(2)
+        raise last or RuntimeError("no Gemini model configured")
 
 
 def _parse_array(raw: str) -> list[str]:

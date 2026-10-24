@@ -61,8 +61,9 @@ def make_translator():
         return ClaudeTranslator(os.environ["ANTHROPIC_API_KEY"],
                                 os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5"))
     if choice == "gemini":
+        models = os.getenv("GEMINI_MODEL", "gemini-3.5-flash,gemini-3.1-flash-lite")
         return GeminiTranslator(os.environ["GEMINI_API_KEY"],
-                                os.getenv("GEMINI_MODEL", "gemini-3.8-flash"))
+                                [m.strip() for m in models.split(",") if m.strip()])
     return GoogleTranslator(os.environ["GOOGLE_API_KEY"])
 
 
