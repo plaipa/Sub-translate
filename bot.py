@@ -7,11 +7,13 @@ import os
 import time
 from pathlib import PurePath
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (BotCommand, BotCommandScopeChat, InlineKeyboardButton,
+                      InlineKeyboardMarkup, Update)
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
-                          MessageHandler, filters)
+                          MessageHandler, PersistenceInput, PicklePersistence, filters)
 
 import subtitles
+from i18n import COMMANDS, DEFAULT_UI, NATIVE, PICK_UI, UI_LANGUAGES, text
 from translators import (LANGUAGES, ClaudeTranslator, GeminiTranslator, GoogleTranslator,
                          translate_all)
 
@@ -27,8 +29,12 @@ def permitted(update: Update) -> bool:
     return not ALLOWED_USERS or update.effective_user.id in ALLOWED_USERS
 
 
-async def my_id(update: Update, _: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Your Telegram ID: {update.effective_user.id}")
+def t(ctx: ContextTypes.DEFAULT_TYPE, key: str, **kw) -> str:
+    return text(ctx.user_data.get("ui", DEFAULT_UI), key, **kw)
+
+
+def commands(ui: str) -> list[BotCommand]:
+    return [BotCommand(c, text(ui, f"cmd_{c}")) for c in COMMANDS]
 
 
 def make_translator():
@@ -44,29 +50,63 @@ def make_translator():
     return GoogleTranslator(os.environ["GOOGLE_API_KEY"])
 
 
-async def start(update: Update, _: ContextTypes.DEFAULT_TYPE):
+def grid(buttons: list[InlineKeyboardButton], per_row: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([buttons[i:i + per_row] for i in range(0, len(buttons), per_row)])
+
+
+async def ask_ui_language(update: Update, _: ContextTypes.DEFAULT_TYPE):
+    kb = grid([InlineKeyboardButton(n, callback_data=f"ui:{c}") for c, n in UI_LANGUAGES.items()], 2)
+    await update.effective_message.reply_text(PICK_UI, reply_markup=kb)
+
+
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not permitted(update):
-        return await update.message.reply_text("این بات خصوصیه. / This bot is private.")
-    await update.message.reply_text(
-        "سلام! فایل زیرنویس (.srt یا .vtt) رو برام بفرست، زبان مقصد رو انتخاب کن و "
-        "ترجمه‌شده تحویل بگیر.\n\nSend me a subtitle file (.srt / .vtt) and pick a language.")
+        return await update.message.reply_text(t(ctx, "private"))
+    if "ui" not in ctx.user_data:  # first visit: ask which language the bot should speak
+        return await ask_ui_language(update, ctx)
+    await update.message.reply_text(t(ctx, "welcome"))
+
+
+async def language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not permitted(update):
+        return await update.message.reply_text(t(ctx, "private"))
+    await ask_ui_language(update, ctx)
+
+
+async def help_(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(t(ctx, "help"))
+
+
+async def my_id(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(t(ctx, "your_id", id=update.effective_user.id))
+
+
+async def on_ui_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not permitted(update):
+        return
+    ui = q.data.split(":", 1)[1]
+    if ui not in UI_LANGUAGES:
+        return
+    ctx.user_data["ui"] = ui
+    await ctx.bot.set_my_commands(commands(ui), scope=BotCommandScopeChat(q.message.chat_id))
+    await q.edit_message_text(f"{t(ctx, 'ui_set')}\n\n{t(ctx, 'welcome')}")
 
 
 async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not permitted(update):
-        return await update.message.reply_text("این بات خصوصیه. / This bot is private.")
+        return await update.message.reply_text(t(ctx, "private"))
     doc = update.message.document
     if PurePath(doc.file_name or "").suffix.lower() not in ALLOWED:
-        return await update.message.reply_text("فقط فایل‌های .srt و .vtt پشتیبانی می‌شن.")
+        return await update.message.reply_text(t(ctx, "bad_type"))
     if doc.file_size > MAX_BYTES:
-        return await update.message.reply_text("فایل بزرگ‌تر از ۵ مگابایته.")
+        return await update.message.reply_text(t(ctx, "too_big"))
     data = bytes(await (await doc.get_file()).download_as_bytearray())
-    ctx.user_data["pending"] = (doc.file_name, data)
-    langs = list(LANGUAGES.items())
-    rows = [[InlineKeyboardButton(n, callback_data=f"lang:{c}") for c, n in langs[i:i + 3]]
-            for i in range(0, len(langs), 3)]
-    await update.message.reply_text("به چه زبانی ترجمه کنم؟ / Target language?",
-                                    reply_markup=InlineKeyboardMarkup(rows))
+    # Kept in bot_data (not persisted) so uploaded files never end up in the pickle file.
+    ctx.application.bot_data.setdefault("pending", {})[update.effective_user.id] = (doc.file_name, data)
+    kb = grid([InlineKeyboardButton(NATIVE[c], callback_data=f"lang:{c}") for c in LANGUAGES], 3)
+    await update.message.reply_text(t(ctx, "pick_target"), reply_markup=kb)
 
 
 async def on_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -74,12 +114,13 @@ async def on_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     if not permitted(update):
         return
-    pending = ctx.user_data.pop("pending", None)
+    pending = ctx.application.bot_data.get("pending", {}).pop(update.effective_user.id, None)
     if not pending:
-        return await q.edit_message_text("فایل منقضی شده، دوباره بفرست.")
+        return await q.edit_message_text(t(ctx, "expired"))
     name, data = pending
     target = q.data.split(":", 1)[1]
-    await q.edit_message_text(f"در حال ترجمه به {LANGUAGES[target]} …")
+    lang = NATIVE[target]
+    await q.edit_message_text(t(ctx, "translating", lang=lang))
 
     blocks = subtitles.parse(subtitles.decode(data))
     texts = subtitles.cue_texts(blocks)
@@ -89,29 +130,40 @@ async def on_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         nonlocal last
         if time.monotonic() - last > 3:  # stay under Telegram edit rate limits
             last = time.monotonic()
-            await q.edit_message_text(f"در حال ترجمه به {LANGUAGES[target]} … {done}/{total}")
+            await q.edit_message_text(t(ctx, "progress", lang=lang, done=done, total=total))
 
     try:
         translated = await translate_all(ctx.application.bot_data["translator"], texts, target,
                                          on_progress=progress)
     except Exception:
         logging.exception("translation failed")
-        return await q.edit_message_text("ترجمه با خطا مواجه شد. بعداً دوباره امتحان کن.")
+        return await q.edit_message_text(t(ctx, "failed"))
 
     out = subtitles.render(blocks, translated).encode("utf-8-sig")
     p = PurePath(name)
     await q.message.reply_document(out, filename=f"{p.stem}.{target}{p.suffix}")
-    await q.edit_message_text("✅ آماده شد.")
+    await q.edit_message_text(t(ctx, "done"))
+
+
+async def post_init(app: Application):
+    await app.bot.set_my_commands(commands(DEFAULT_UI))  # default menu is English
 
 
 def main():
+    persistence = PicklePersistence(
+        "state.pickle", store_data=PersistenceInput(bot_data=False, chat_data=False,
+                                                    callback_data=False))
     app = (Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"])
+           .persistence(persistence).post_init(post_init)
            .connect_timeout(30).read_timeout(30).write_timeout(30).pool_timeout(30)
            .build())  # defaults (5s) are too short for a cold-started container
     app.bot_data["translator"] = make_translator()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("language", language))
+    app.add_handler(CommandHandler("help", help_))
     app.add_handler(CommandHandler("id", my_id))
     app.add_handler(MessageHandler(filters.Document.ALL, on_file))
+    app.add_handler(CallbackQueryHandler(on_ui_language, pattern=r"^ui:"))
     app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
     # Webhook mode (e.g. Render free web service: Telegram wakes the sleeping service);
     # otherwise long polling.

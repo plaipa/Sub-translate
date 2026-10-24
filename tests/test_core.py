@@ -52,3 +52,14 @@ class Bad(LLMTranslator):
 def test_llm_split_fallback_keeps_alignment():
     out = asyncio.run(Bad().translate_batch(["a", "b", "c"], "fa"))
     assert out == ["a", "b", "c"]
+
+
+def test_i18n_all_languages_complete():
+    from i18n import COMMANDS, S, UI_LANGUAGES, text
+    assert set(S) == set(UI_LANGUAGES)
+    en_keys = set(S["en"])
+    for code, strings in S.items():
+        assert set(strings) == en_keys, code
+        assert all(f"cmd_{c}" in strings for c in COMMANDS)
+        text(code, "progress", lang="x", done=1, total=2)  # placeholders format cleanly
+    assert text("xx", "done") == S["en"]["done"]  # unknown language falls back to English
