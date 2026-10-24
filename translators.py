@@ -5,6 +5,7 @@ import asyncio
 import html
 import json
 import logging
+import time
 from typing import Protocol
 
 import httpx
@@ -65,36 +66,42 @@ class GoogleTranslator:
 
 
 class LLMTranslator:
-    """Shared prompt + retry/split logic for chat models; subclasses implement `_complete`."""
+    """Shared prompt + retry logic for chat models; subclasses implement `_complete`."""
     concurrency = 4
     SYSTEM = (
-        "You are a professional subtitle translator. Translate each numbered subtitle line into "
-        "{lang}. The lines are consecutive dialogue from one film/show, so use surrounding lines "
-        "for context, gender, tone and slang; write natural spoken {lang}, not literal text. "
-        "Keep HTML tags like <i> and line breaks (\\n) in place, and keep names, numbers and "
-        "sound cues like [music] consistent. Reply with ONLY a JSON array of strings, the same "
-        "length and order as the input."
+        "You are a professional subtitle translator. The input is a JSON object mapping line ids "
+        "to subtitle lines, consecutive dialogue from one film/show. Translate every line into "
+        "{lang}, using the surrounding lines for context, gender, tone and slang; write natural "
+        "spoken {lang}, not literal text. Keep HTML tags like <i> and line breaks (\\n) in place, "
+        "and keep names, numbers and sound cues like [music] consistent. Reply with ONLY a JSON "
+        "object with exactly the same ids, each mapped to its translated line."
     )
 
     async def _complete(self, system: str, user: str) -> str:
         raise NotImplementedError
 
     async def translate_batch(self, texts: list[str], target: str) -> list[str]:
+        """Lines are keyed by id, so a dropped or merged line only costs a retry of the missing
+        ids (not the whole batch); lines still missing after 3 tries keep their original text."""
         system = self.SYSTEM.format(lang=LANGUAGES.get(target, target))
-        for attempt in range(2):
-            raw = await self._complete(system, json.dumps(texts, ensure_ascii=False))
+        pending = {str(i): t for i, t in enumerate(texts)}
+        done: dict[str, str] = {}
+        for attempt in range(3):
+            if not pending:
+                break
+            raw = await self._complete(system, json.dumps(pending, ensure_ascii=False))
             try:
-                out = _parse_array(raw)
-                if len(out) == len(texts):
-                    return out
+                out = _parse_object(raw)
             except ValueError:
-                pass
-            log.warning("bad model output (attempt %d, %d lines)", attempt + 1, len(texts))
-        if len(texts) == 1:
-            return texts  # give up on this line, keep the original
-        mid = len(texts) // 2  # misaligned output: retry on smaller halves
-        return (await self.translate_batch(texts[:mid], target)
-                + await self.translate_batch(texts[mid:], target))
+                log.warning("unparseable model output (attempt %d, %d lines)", attempt + 1, len(pending))
+                continue
+            for k in list(pending):
+                if isinstance(out.get(k), str):
+                    done[k] = out[k]
+                    del pending[k]
+            if pending:
+                log.warning("model skipped %d/%d lines (attempt %d)", len(pending), len(texts), attempt + 1)
+        return [done.get(str(i), t) for i, t in enumerate(texts)]
 
 
 class ClaudeTranslator(LLMTranslator):
@@ -116,16 +123,21 @@ class GeminiTranslator(LLMTranslator):
     URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     RETRY_STATUS = (429, 500, 503)
 
+    COOLDOWN = 60  # seconds to skip a model after it failed with an overload / quota error
+
     def __init__(self, api_key: str, models: list[str]):
         self.key, self.models = api_key, models
         self.http = httpx.AsyncClient(timeout=60)
+        self._cool: dict[str, float] = {}
 
     async def _complete(self, system: str, user: str) -> str:
         body = {"systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": user}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3}}
         last: Exception | None = None
-        for model in self.models:
+        now = time.monotonic()
+        usable = [m for m in self.models if self._cool.get(m, 0) <= now]
+        for model in usable or self.models:  # everything cooling down: just try them all again
             for attempt in range(2):
                 try:
                     r = await self.http.post(self.URL.format(model=model), json=body,
@@ -139,15 +151,19 @@ class GeminiTranslator(LLMTranslator):
                 log.warning("gemini %s failed (attempt %d): %r", model, attempt + 1, last)
                 if attempt == 0:
                     await asyncio.sleep(2)
+            self._cool[model] = time.monotonic() + self.COOLDOWN
         raise last or RuntimeError("no Gemini model configured")
 
 
-def _parse_array(raw: str) -> list[str]:
+def _parse_object(raw: str) -> dict:
     raw = raw.strip()
-    start, end = raw.find("["), raw.rfind("]")
+    start, end = raw.find("{"), raw.rfind("}")
     if start < 0 or end < 0:
-        raise ValueError("no JSON array")
-    data = json.loads(raw[start:end + 1])
-    if not isinstance(data, list) or not all(isinstance(x, str) for x in data):
-        raise ValueError("not a list of strings")
+        raise ValueError("no JSON object")
+    try:
+        data = json.loads(raw[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise ValueError(str(e)) from e
+    if not isinstance(data, dict):
+        raise ValueError("not an object")
     return data

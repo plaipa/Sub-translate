@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import subtitles
-from translators import LLMTranslator, _parse_array, translate_all
+from translators import LLMTranslator, _parse_object, translate_all
 
 SRT = "1\n00:00:01,000 --> 00:00:02,000\nHello\nworld\n\n2\n00:00:03,000 --> 00:00:04,000\n{\\an8}<i>Bye</i>\n"
 VTT = "WEBVTT\n\nNOTE hi\n\n00:01.000 --> 00:02.000\nHello\n"
@@ -37,21 +37,38 @@ def test_decode_cp1256():
     assert subtitles.decode("سلام".encode("cp1256")) == "سلام"
 
 
-def test_parse_array_tolerates_wrapping():
-    assert _parse_array('Here:\n```json\n["a","b"]\n```') == ["a", "b"]
+def test_parse_object_tolerates_wrapping():
+    assert _parse_object('Here:\n```json\n{"0": "a", "1": "b"}\n```') == {"0": "a", "1": "b"}
 
 
-class Bad(LLMTranslator):
-    """Misaligned output for batches > 1 forces the split-and-retry path."""
+class Flaky(LLMTranslator):
+    """Drops id "1" on the first call; a retry must only ask for the missing ids."""
+    def __init__(self):
+        self.calls = []
+
     async def _complete(self, system, user):
         import json
         items = json.loads(user)
-        return json.dumps(items if len(items) == 1 else items[:-1])
+        self.calls.append(sorted(items))
+        out = {k: v.upper() for k, v in items.items()}
+        if len(self.calls) == 1:
+            out.pop("1")
+        return json.dumps(out)
 
 
-def test_llm_split_fallback_keeps_alignment():
-    out = asyncio.run(Bad().translate_batch(["a", "b", "c"], "fa"))
-    assert out == ["a", "b", "c"]
+def test_llm_retries_only_missing_lines_and_keeps_alignment():
+    tr = Flaky()
+    assert asyncio.run(tr.translate_batch(["a", "b", "c"], "fa")) == ["A", "B", "C"]
+    assert tr.calls == [["0", "1", "2"], ["1"]]
+
+
+class Broken(LLMTranslator):
+    async def _complete(self, system, user):
+        return "sorry, I cannot do that"
+
+
+def test_llm_gives_up_gracefully_with_original_text():
+    assert asyncio.run(Broken().translate_batch(["a", "b"], "fa")) == ["a", "b"]
 
 
 def test_i18n_all_languages_complete():
@@ -92,12 +109,14 @@ def test_gemini_falls_back_to_next_model_on_overload():
     def handler(request):
         if "bad-model" in str(request.url):
             return httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}})
-        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": '["ok"]'}]}}]})
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": '{"0": "ok"}'}]}}]})
 
     async def go():
         tr = GeminiTranslator("k", ["bad-model", "good-model"])
         tr.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         async def no_sleep(_): pass
         import translators; translators.asyncio.sleep = no_sleep
-        return await tr.translate_batch(["x"], "fa")
+        out = await tr.translate_batch(["x"], "fa")
+        assert "bad-model" in tr._cool  # overloaded model is skipped for a while
+        return out
     assert asyncio.run(go()) == ["ok"]
