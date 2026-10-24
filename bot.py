@@ -13,7 +13,8 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, Con
                           MessageHandler, PersistenceInput, PicklePersistence, filters)
 
 import subtitles
-from i18n import COMMANDS, DEFAULT_UI, NATIVE, PICK_UI, UI_LANGUAGES, text
+from i18n import (COMMANDS, DEFAULT_UI, DESCRIPTION, NATIVE, PICK_UI, SHORT_DESCRIPTION,
+                  UI_LANGUAGES, text)
 from translators import (LANGUAGES, ClaudeTranslator, GeminiTranslator, GoogleTranslator,
                          translate_all)
 
@@ -147,6 +148,8 @@ async def on_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(app: Application):
     await app.bot.set_my_commands(commands(DEFAULT_UI))  # default menu is English
+    await app.bot.set_my_description(DESCRIPTION)
+    await app.bot.set_my_short_description(SHORT_DESCRIPTION)
 
 
 def main():

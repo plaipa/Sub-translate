@@ -16,6 +16,18 @@ NATIVE = {
 
 COMMANDS = ("start", "language", "help", "id")
 
+SUPPORT = "@plaipa"
+# Bot profile texts (Telegram limits: description 512 chars, short description 120).
+DESCRIPTION = (
+    "Translate subtitle files in seconds. Send a .srt or .vtt file, pick a language - "
+    "English, Persian, Chinese, Russian, Hindi, Spanish, Turkish, Arabic and more - and get it "
+    "back translated with the original timing and formatting intact. AI-powered, "
+    "dialogue-aware translation that reads like natural speech.\n\n"
+    "Send /start to begin.\n"
+    f"Questions, problems or ideas? Contact support: {SUPPORT}"
+)
+SHORT_DESCRIPTION = f"AI subtitle translator for .srt/.vtt files. Support: {SUPPORT}"
+
 S = {
 "en": dict(
     welcome="Hi! Send me a subtitle file (.srt or .vtt), pick a target language, and I'll send it back translated.\n\nMenu: /language – change bot language · /help – how it works",

@@ -63,3 +63,9 @@ def test_i18n_all_languages_complete():
         assert all(f"cmd_{c}" in strings for c in COMMANDS)
         text(code, "progress", lang="x", done=1, total=2)  # placeholders format cleanly
     assert text("xx", "done") == S["en"]["done"]  # unknown language falls back to English
+
+
+def test_profile_texts_fit_telegram_limits_and_mention_support():
+    from i18n import DESCRIPTION, SHORT_DESCRIPTION, SUPPORT
+    assert len(DESCRIPTION) <= 512 and len(SHORT_DESCRIPTION) <= 120
+    assert SUPPORT in DESCRIPTION and SUPPORT in SHORT_DESCRIPTION

@@ -23,3 +23,8 @@ Create a *Web Service* from this repo (Docker), free instance, and set env vars
 `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`, `ALLOWED_USERS`. Render sets `RENDER_EXTERNAL_URL`
 and `PORT`, so the bot switches to webhook mode by itself. The free instance sleeps when
 idle; the first message after a sleep is answered after a cold start.
+
+## Branding
+`assets/logo.svg` / `assets/logo.png` (512x512) is the bot's profile picture: upload the PNG via
+@BotFather -> `/setuserpic`. The bot sets its own description and short description (support:
+@plaipa) on startup, see `i18n.py`.
